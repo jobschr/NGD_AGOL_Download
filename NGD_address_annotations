@@ -1,0 +1,142 @@
+import arcpy
+from datetime import datetime
+arcpy.env.overwriteOutput = True
+#arcpy.env.workspace = 
+project = r"D:\GIS\Work\ngd_redline\ngd_redline_canada\ngd_redline_canada_2.aprx"
+
+map_name = "Address Labels Canada"
+feature_lyr = "ngd_al_2_aux"
+feature_field = "CSD_UID_L"
+conversion_scale = 1128
+
+feature_extent_buffer = 10
+
+search_c_query = "PR_L IS NOT NULL"
+
+anno_out_location = r"D:\GIS\Work\ngd_redline\ngd_redline_canada\anno_9k.gdb" 
+anno_out_suffix = "_anno_1K"
+
+"""----------------------------------"""
+
+    
+uid_list = []
+uid_dict = {}
+
+aprx = arcpy.mp.ArcGISProject(project)
+
+m = aprx.listMaps(map_name)[0]
+
+lyr = m.listLayers(feature_lyr)[0] rows = arcpy.da.SearchCursor(lyr, [feature_field, "AFL_VAL", \
+                                          "ATL_VAL", \
+                                          "AFR_VAL", \
+                                          "ATR_VAL", "SHAPE@"], search_c_query)
+                                        
+for row in rows:
+
+    feature, afl, atl, afr, atr, geom = row
+    feature = feature[:4]
+
+    xmin = geom.extent.XMin
+    xmax = geom.extent.XMax
+    ymin = geom.extent.YMin
+    ymax = geom.extent.YMax
+
+    if feature not in uid_dict:
+        uid_dict[feature] = {"XMIN": xmin, "YMIN": ymin, "XMAX": xmax, "YMAX": ymax, \
+                            "F_COUNT": 1, "AFL_COUNT": 0, "ATL_COUNT": 0, "AFR_COUNT": 0, "ATR_COUNT": 0}
+        
+    else:
+        uid_dict[feature]["F_COUNT"] += 1
+        if xmin < uid_dict[feature]["XMIN"]:
+            uid_dict[feature]["XMIN"] = xmin
+
+        if ymin < uid_dict[feature]["YMIN"]:
+            uid_dict[feature]["YMIN"] = ymin
+
+        if xmax > uid_dict[feature]["XMAX"]:
+            uid_dict[feature]["XMAX"] = xmax
+
+        if ymax > uid_dict[feature]["YMAX"]:
+            uid_dict[feature]["YMAX"] = ymax
+       
+    if afl is not None:
+        uid_dict[feature]["AFL_COUNT"] += 1
+
+    if atl is not None:
+        uid_dict[feature]["ATL_COUNT"] += 1
+
+    if afr is not None:
+        uid_dict[feature]["AFR_COUNT"] += 1
+        
+    if atr is not None:
+        uid_dict[feature]["ATR_COUNT"] += 1
+        
+       
+#print("FEATURE|FEATURE_COUNT|ADDR_SUM|XMIN|YMIN|XMAX|YMAX")
+for feature, feature_dict in uid_dict.items():
+
+    f_count = feature_dict["F_COUNT"]
+    addr_sum = feature_dict["AFL_COUNT"] + feature_dict["ATL_COUNT"] + feature_dict["AFR_COUNT"]+ feature_dict["ATR_COUNT"]
+
+    xmin = feature_dict["XMIN"]
+    ymin = feature_dict["YMIN"]
+    xmax = feature_dict["XMAX"]
+    ymax = feature_dict["YMAX"]
+    
+    #print("{}|{}|{}|{}|{}|{}|{}".format(feature, f_count, addr_sum, xmin, ymin, xmax, ymax))
+
+
+    print("Creating annotations from {}".format(feature))
+    
+    xmin = feature_dict["XMIN"]
+    ymin = feature_dict["YMIN"]
+    xmax = feature_dict["XMAX"]
+    ymax = feature_dict["YMAX"]
+
+    feature_extents = "{} {} {} {}".format(xmin - feature_extent_buffer, ymin - feature_extent_buffer,\
+                                        xmax + feature_extent_buffer, ymax + feature_extent_buffer)
+
+
+    print("Address count: {}; feature extent: {}".format(addr_sum, feature_extents))
+
+    
+    anno_output = "{}_{}".format(anno_out_suffix, feature)
+    lyr.definitionQuery = "{} LIKE '{}%'".format(feature_field, feature)
+    
+    if lyr.supports("SHOWLABELS"):
+        lyr.showLabels = True
+        for label_class in lyr.listLabelClasses():
+            if "AFL" in label_class.name or \
+                "ATL" in label_class.name or \
+                "AFR" in label_class.name or \
+                "ATR" in label_class.name:
+                label_class.visible = True
+    
+    aprx.save()
+    
+    print("Creating annotations {}{} from feature {}".format(feature_lyr, anno_output, feature))
+    start_time = datetime.now()
+    print(start_time)
+
+    #if not using arcgis/google need to update service_file parameter
+    #may need to update extent param to the feature extents if possible
+    parameters = {"input_map": m,
+                "conversion_scale": conversion_scale,
+                "output_geodatabase": anno_out_location,
+                "anno_suffix": anno_output,
+                "extent": feature_extents,
+                "generate_unplaced": "GENERATE_UNPLACED",
+                "feature_linked": "STANDARD",
+                "which_layers": "SINGLE_LAYER",
+                "single_layer": feature_lyr 
+                }
+           
+    arcpy.cartography.ConvertLabelsToAnnotation(**parameters)            
+    end_time = datetime.now()
+    duration = end_time - start_time
+    
+    print("{}{} created in {}".format(feature_lyr, anno_output, duration))
+
+aprx.save()
+del lyr
+del aprx    
